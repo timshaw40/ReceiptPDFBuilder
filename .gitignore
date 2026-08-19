@@ -1,0 +1,15 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# Built app bundles (copy of derived product)
+*.app/
+
+# Test artifacts
+*.profraw
+
+# macOS
+.DS_Store

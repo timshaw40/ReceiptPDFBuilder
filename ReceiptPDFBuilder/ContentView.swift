@@ -1,0 +1,345 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct ContentView: View {
+    @State private var sourcePDFURL: URL?
+    @State private var photoURLs: [URL] = []
+    @State private var statusMessage: String?
+    @State private var errorMessage: String?
+    @State private var lastOutputURL: URL?
+    @State private var isGenerating = false
+    @State private var isPDFDropTargeted = false
+    @State private var isPhotoDropTargeted = false
+
+    private let photoExtensions: Set<String> = ["jpg", "jpeg", "heic", "png"]
+
+    private var canGenerate: Bool {
+        sourcePDFURL != nil && !photoURLs.isEmpty && !isGenerating
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Image(systemName: "doc.badge.plus")
+                    .font(.title)
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Receipt PDF Builder")
+                        .font(.title2.bold())
+                    Text("Combine an existing PDF with black & white receipt images.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            sourceSection
+            photosSection
+
+            Spacer(minLength: 4)
+
+            footer
+        }
+        .padding(20)
+        .frame(minWidth: 560, minHeight: 640)
+    }
+
+    // MARK: - Source PDF
+
+    private var sourceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("1.  Existing PDF")
+                .font(.headline)
+
+            if let url = sourcePDFURL {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.richtext")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(url.lastPathComponent)
+                            .font(.body)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(url.deletingLastPathComponent().path)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer()
+                    Button("Replace…") { choosePDF() }
+                        .buttonStyle(.bordered)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+            } else {
+                DropZone(title: "Drop PDF here",
+                         subtitle: "or use the button below",
+                         isTargeted: isPDFDropTargeted)
+                    .dropDestination(for: URL.self, action: { urls, _ in
+                        guard let pdf = urls.first(where: { $0.pathExtension.lowercased() == "pdf" }) else {
+                            return false
+                        }
+                        sourcePDFURL = pdf
+                        clearResults()
+                        return true
+                    }, isTargeted: { isPDFDropTargeted = $0 })
+                Button("Choose PDF…") { choosePDF() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .underPageBackgroundColor)))
+    }
+
+    // MARK: - Photos
+
+    private var photosSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("2.  Receipt photos")
+                    .font(.headline)
+                if !photoURLs.isEmpty {
+                    Text("(\(photoURLs.count))")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            DropZone(title: "Drop JPG / HEIC photos here",
+                     subtitle: "One photo per page, converted to black & white",
+                     isTargeted: isPhotoDropTargeted)
+                .dropDestination(for: URL.self, action: { urls, _ in
+                    let accepted = acceptedPhotoURLs(urls)
+                    guard !accepted.isEmpty else { return false }
+                    addPhotos(accepted)
+                    return true
+                }, isTargeted: { isPhotoDropTargeted = $0 })
+
+            if !photoURLs.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(Array(photoURLs.enumerated()), id: \.element) { index, url in
+                            PhotoRow(url: url) {
+                                photoURLs.remove(at: index)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+
+            Button("Add Photos…") { choosePhotos() }
+                .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .underPageBackgroundColor)))
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button("Create Receipt PDF") {
+                    generate()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canGenerate)
+
+                if isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Converting…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if let url = lastOutputURL {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
+            if let message = statusMessage {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Saved: \(message)")
+                        .font(.caption)
+                }
+            } else if let error = errorMessage {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func choosePDF() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the PDF to extend"
+        panel.allowedContentTypes = [.pdf]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            sourcePDFURL = url
+            clearResults()
+        }
+    }
+
+    private func choosePhotos() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose receipt photos"
+        panel.allowedContentTypes = [.jpeg, .heic, .png]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        if panel.runModal() == .OK {
+            addPhotos(panel.urls)
+        }
+    }
+
+    private func addPhotos(_ urls: [URL]) {
+        let accepted = acceptedPhotoURLs(urls)
+        guard !accepted.isEmpty else { return }
+        for url in accepted where !photoURLs.contains(url) {
+            photoURLs.append(url)
+        }
+        clearResults()
+    }
+
+    private func acceptedPhotoURLs(_ urls: [URL]) -> [URL] {
+        urls.filter { url in
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue else {
+                return false
+            }
+            return photoExtensions.contains(url.pathExtension.lowercased())
+        }
+    }
+
+    private func clearResults() {
+        statusMessage = nil
+        errorMessage = nil
+        lastOutputURL = nil
+    }
+
+    private func generate() {
+        guard let source = sourcePDFURL, !photoURLs.isEmpty else { return }
+        isGenerating = true
+        clearResults()
+        let urls = photoURLs
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let outputURL = try PDFBuilder.buildPDF(sourceURL: source, photoURLs: urls)
+                await MainActor.run {
+                    statusMessage = outputURL.lastPathComponent
+                    lastOutputURL = outputURL
+                    isGenerating = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isGenerating = false
+                }
+            }
+        }
+    }
+
+    }
+
+// MARK: - Support views
+
+struct DropZone: View {
+    let title: String
+    let subtitle: String
+    let isTargeted: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 28))
+                .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
+            Text(title)
+                .font(.body.weight(.medium))
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 96)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .quaternarySystemFill))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(
+                    isTargeted ? Color.accentColor : Color.secondary.opacity(0.4),
+                    style: StrokeStyle(lineWidth: 2, dash: [6])
+                )
+        )
+        .animation(.easeInOut(duration: 0.15), value: isTargeted)
+    }
+}
+
+struct PhotoRow: View {
+    let url: URL
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let thumbnail = ThumbnailLoader.load(url) {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 34, height: 34)
+                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.secondary.opacity(0.3)))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            } else {
+                Image(systemName: "photo")
+                    .frame(width: 34, height: 34)
+            }
+            Text(url.lastPathComponent)
+                .font(.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button(action: remove) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove this photo")
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+}
+
+enum ThumbnailLoader {
+    static func load(_ url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 96,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+}
