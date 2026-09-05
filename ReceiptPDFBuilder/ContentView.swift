@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -12,7 +13,7 @@ struct ContentView: View {
     @State private var isPDFDropTargeted = false
     @State private var isPhotoDropTargeted = false
 
-    private let photoExtensions: Set<String> = ["jpg", "jpeg", "heic", "png"]
+    private let photoExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png"]
 
     private var canGenerate: Bool {
         sourcePDFURL != nil && !photoURLs.isEmpty && !isGenerating
@@ -81,8 +82,7 @@ struct ContentView: View {
                         guard let pdf = urls.first(where: { $0.pathExtension.lowercased() == "pdf" }) else {
                             return false
                         }
-                        sourcePDFURL = pdf
-                        clearResults()
+                        acceptSourcePDF(pdf)
                         return true
                     }, isTargeted: { isPDFDropTargeted = $0 })
                 Button("Choose PDF…") { choosePDF() }
@@ -107,7 +107,7 @@ struct ContentView: View {
                 }
             }
 
-            DropZone(title: "Drop JPG / HEIC photos here",
+            DropZone(title: "Drop JPG / HEIC / PNG photos here",
                      subtitle: "One photo per page, converted to black & white",
                      isTargeted: isPhotoDropTargeted)
                 .dropDestination(for: URL.self, action: { urls, _ in
@@ -130,8 +130,14 @@ struct ContentView: View {
                 .frame(maxHeight: 240)
             }
 
-            Button("Add Photos…") { choosePhotos() }
-                .buttonStyle(.bordered)
+            HStack {
+                Button("Add Photos…") { choosePhotos() }
+                    .buttonStyle(.bordered)
+                Button("Paste Photo") { pastePhoto() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut("v", modifiers: .command)
+                    .help("Paste a receipt image from the clipboard (e.g. a screenshot)")
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .underPageBackgroundColor)))
@@ -193,20 +199,51 @@ struct ContentView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            sourcePDFURL = url
-            clearResults()
+            acceptSourcePDF(url)
         }
+    }
+
+    /// Validates the PDF before adopting it so a broken file surfaces an error
+    /// immediately instead of failing later at generate time.
+    private func acceptSourcePDF(_ url: URL) {
+        guard PDFDocument(url: url) != nil else {
+            clearResults()
+            errorMessage = "Could not read the PDF \"\(url.lastPathComponent)\"."
+            return
+        }
+        clearResults()
+        sourcePDFURL = url
     }
 
     private func choosePhotos() {
         let panel = NSOpenPanel()
         panel.title = "Choose receipt photos"
-        panel.allowedContentTypes = [.jpeg, .heic, .png]
+        panel.allowedContentTypes = [.jpeg, .heic, .heif, .png]
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         if panel.runModal() == .OK {
             addPhotos(panel.urls)
         }
+    }
+
+    /// Adds the clipboard image (screenshot, copied photo) as a PNG receipt.
+    private func pastePhoto() {
+        guard let image = NSPasteboard.general.readObjects(forClasses: [NSImage.self])?.first as? NSImage,
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else {
+            errorMessage = "No image on the clipboard. Copy or screenshot a receipt first."
+            return
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ReceiptPDFBuilder-pasted-\(UUID().uuidString).png")
+        do {
+            try png.write(to: url)
+        } catch {
+            errorMessage = "Could not save the pasted image: \(error.localizedDescription)"
+            return
+        }
+        addPhotos([url])
     }
 
     private func addPhotos(_ urls: [URL]) {

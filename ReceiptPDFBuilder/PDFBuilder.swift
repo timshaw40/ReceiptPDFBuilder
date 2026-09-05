@@ -94,8 +94,13 @@ enum PDFBuilder {
 
         let stamp = timestampString(for: date)
         let baseName = sourceURL.deletingPathExtension().lastPathComponent
-        let outputName = "\(baseName)-receipts-\(stamp).pdf"
-        let outputURL = sourceURL.deletingLastPathComponent().appendingPathComponent(outputName)
+        let outputFolder = sourceURL.deletingLastPathComponent()
+        var outputURL = outputFolder.appendingPathComponent("\(baseName)-receipts-\(stamp).pdf")
+        var uniqueSuffix = 2
+        while FileManager.default.fileExists(atPath: outputURL.path) {
+            outputURL = outputFolder.appendingPathComponent("\(baseName)-receipts-\(stamp)-\(uniqueSuffix).pdf")
+            uniqueSuffix += 1
+        }
 
         let data: Data
         do {
@@ -107,7 +112,7 @@ enum PDFBuilder {
             throw PDFBuilderError.writeFailed(error.localizedDescription)
         }
         do {
-            try data.write(to: outputURL)
+            try data.write(to: outputURL, options: .atomic)
         } catch {
             throw PDFBuilderError.writeFailed(error.localizedDescription)
         }

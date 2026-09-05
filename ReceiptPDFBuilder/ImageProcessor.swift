@@ -5,6 +5,10 @@ import Foundation
 
 enum ImageProcessor {
 
+    /// One shared context for the whole batch — creating a CIContext per photo
+    /// is measurably slow and forces shader/kernel recompilation each time.
+    private static let sharedContext = CIContext(options: [.workingColorSpace: NSNull()])
+
     /// Decodes an image file (JPG, HEIC, PNG, ...) into a CGImage.
     ///
     /// Decodes through a thumbnail pipeline capped at `maxPixelSize` so large
@@ -44,8 +48,7 @@ enum ImageProcessor {
         let composited = mono.composited(over: white)
 
         // NSNull working color space keeps conversion simple and predictable.
-        let context = CIContext(options: [.workingColorSpace: NSNull()])
-        guard let output = context.createCGImage(composited, from: composited.extent) else {
+        guard let output = sharedContext.createCGImage(composited, from: composited.extent) else {
             throw PDFBuilderError.grayscaleFailed("could not render output")
         }
         return output

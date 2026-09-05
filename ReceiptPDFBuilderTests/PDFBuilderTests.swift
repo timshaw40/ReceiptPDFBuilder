@@ -127,6 +127,24 @@ final class PDFBuilderTests: XCTestCase {
         XCTAssertTrue(stamp.range(of: #"^\d{8}-\d{6}$"#, options: .regularExpression) != nil)
     }
 
+    func testRebuildingWithSameTimestampDoesNotOverwritePreviousOutput() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sourceURL = dir.appendingPathComponent("report.pdf")
+        try writeSourcePDF(to: sourceURL, pages: 1)
+        let photoURL = dir.appendingPathComponent("r.jpg")
+        try writeSolidJPEG(to: photoURL, color: (red: 0.0, green: 0.0, blue: 1.0), width: 100, height: 100)
+
+        let first = try PDFBuilder.buildPDF(sourceURL: sourceURL, photoURLs: [photoURL], date: fixedDate)
+        let second = try PDFBuilder.buildPDF(sourceURL: sourceURL, photoURLs: [photoURL], date: fixedDate)
+
+        XCTAssertNotEqual(first, second, "A rebuild in the same second must not clobber the first output")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertEqual(second.lastPathComponent, "report-receipts-20260102-034500-2.pdf")
+    }
+
     // MARK: - Fixtures
 
     private var fixedDate: Date {
