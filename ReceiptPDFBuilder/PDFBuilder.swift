@@ -33,7 +33,7 @@ enum PDFBuilder {
     /// 0.5 inch margin around each receipt page.
     static let pageMargin: CGFloat = 36
 
-    /// Appends one black & white PDF page per photo to a copy of the source PDF
+    /// Appends black & white pages for each image or PDF receipt to a copy of the source PDF
     /// and writes the combined PDF next to the source as
     /// "<source>-receipts-<timestamp>.pdf".
     ///
@@ -57,8 +57,8 @@ enum PDFBuilder {
             throw PDFBuilderError.pdfGenerationFailed
         }
 
-        // Render each receipt image into its own PDF page via a Core Graphics
-        // PDF context, then splice those pages onto the source document.
+        // Render receipt images and PDF pages into black & white pages, then
+        // splice those pages onto the source document.
         let mediaBox = CGRect(x: 0, y: 0, width: pageSize.width, height: pageSize.height)
         let output = NSMutableData()
         var box = mediaBox
@@ -68,18 +68,21 @@ enum PDFBuilder {
         }
 
         for url in photoURLs {
-            let image = try ImageProcessor.decodeImage(at: url)
-            let grayscale = try ImageProcessor.grayscale(image)
-
-            context.beginPDFPage(nil)
-            context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-            context.fill(mediaBox)
-            context.interpolationQuality = .high
-
-            let drawRect = mediaBox.insetBy(dx: pageMargin, dy: pageMargin)
-            let imageSize = CGSize(width: grayscale.width, height: grayscale.height)
-            context.draw(grayscale, in: aspectFitRect(imageSize: imageSize, in: drawRect))
-            context.endPDFPage()
+            if url.pathExtension.lowercased() == "pdf" {
+                guard let receiptDocument = PDFDocument(url: url), receiptDocument.pageCount > 0 else {
+                    throw PDFBuilderError.pdfLoadFailed(url.lastPathComponent)
+                }
+                for index in 0..<receiptDocument.pageCount {
+                    guard let page = receiptDocument.page(at: index),
+                          let image = Self.image(from: page) else {
+                        throw PDFBuilderError.pdfLoadFailed(url.lastPathComponent)
+                    }
+                    try appendReceiptPage(image, to: context, mediaBox: mediaBox)
+                }
+            } else {
+                let image = try ImageProcessor.decodeImage(at: url)
+                try appendReceiptPage(image, to: context, mediaBox: mediaBox)
+            }
         }
         context.closePDF()
 
@@ -117,6 +120,32 @@ enum PDFBuilder {
             throw PDFBuilderError.writeFailed(error.localizedDescription)
         }
         return outputURL
+    }
+
+    /// Rasterizes a PDF page at up to 3000 pixels on its longest edge.
+    private static func image(from page: PDFPage, maxPixelSize: CGFloat = 3000) -> CGImage? {
+        let bounds = page.bounds(for: .mediaBox)
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let scale = maxPixelSize / max(bounds.width, bounds.height)
+        let thumbnailSize = NSSize(width: bounds.width * scale, height: bounds.height * scale)
+        let thumbnail = page.thumbnail(of: thumbnailSize, for: .mediaBox)
+        var proposedRect = NSRect(origin: .zero, size: thumbnail.size)
+        return thumbnail.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
+    }
+
+    private static func appendReceiptPage(_ image: CGImage,
+                                          to context: CGContext,
+                                          mediaBox: CGRect) throws {
+        let grayscale = try ImageProcessor.grayscale(image)
+        context.beginPDFPage(nil)
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(mediaBox)
+        context.interpolationQuality = .high
+
+        let drawRect = mediaBox.insetBy(dx: pageMargin, dy: pageMargin)
+        let imageSize = CGSize(width: grayscale.width, height: grayscale.height)
+        context.draw(grayscale, in: aspectFitRect(imageSize: imageSize, in: drawRect))
+        context.endPDFPage()
     }
 
     /// Scales an image to fit `container` while preserving aspect ratio.

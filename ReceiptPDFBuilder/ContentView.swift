@@ -5,18 +5,18 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var sourcePDFURL: URL?
-    @State private var photoURLs: [URL] = []
+    @State private var receiptURLs: [URL] = []
     @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var lastOutputURL: URL?
     @State private var isGenerating = false
     @State private var isPDFDropTargeted = false
-    @State private var isPhotoDropTargeted = false
+    @State private var isReceiptDropTargeted = false
 
-    private let photoExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png"]
+    private let receiptExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "pdf"]
 
     private var canGenerate: Bool {
-        sourcePDFURL != nil && !photoURLs.isEmpty && !isGenerating
+        sourcePDFURL != nil && !receiptURLs.isEmpty && !isGenerating
     }
 
     var body: some View {
@@ -28,7 +28,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Receipt PDF Builder")
                         .font(.title2.bold())
-                    Text("Combine an existing PDF with black & white receipt images.")
+                    Text("Combine an existing PDF with black & white receipt images and PDFs.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -98,31 +98,31 @@ struct ContentView: View {
     private var photosSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("2.  Receipt photos")
+                Text("2.  Receipt files")
                     .font(.headline)
-                if !photoURLs.isEmpty {
-                    Text("(\(photoURLs.count))")
+                if !receiptURLs.isEmpty {
+                    Text("(\(receiptURLs.count))")
                         .font(.headline)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            DropZone(title: "Drop JPG / HEIC / PNG photos here",
-                     subtitle: "One photo per page, converted to black & white",
-                     isTargeted: isPhotoDropTargeted)
+            DropZone(title: "Drop JPG / HEIC / PNG photos or PDFs here",
+                     subtitle: "Receipt photos and PDF pages are converted to black & white",
+                     isTargeted: isReceiptDropTargeted)
                 .dropDestination(for: URL.self, action: { urls, _ in
-                    let accepted = acceptedPhotoURLs(urls)
+                    let accepted = acceptedReceiptURLs(urls)
                     guard !accepted.isEmpty else { return false }
-                    addPhotos(accepted)
+                    addReceipts(accepted)
                     return true
-                }, isTargeted: { isPhotoDropTargeted = $0 })
+                }, isTargeted: { isReceiptDropTargeted = $0 })
 
-            if !photoURLs.isEmpty {
+            if !receiptURLs.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 6) {
-                        ForEach(Array(photoURLs.enumerated()), id: \.element) { index, url in
-                            PhotoRow(url: url) {
-                                photoURLs.remove(at: index)
+                        ForEach(Array(receiptURLs.enumerated()), id: \.element) { index, url in
+                            ReceiptRow(url: url) {
+                                receiptURLs.remove(at: index)
                             }
                         }
                     }
@@ -131,7 +131,7 @@ struct ContentView: View {
             }
 
             HStack {
-                Button("Add Photos…") { choosePhotos() }
+                Button("Add Receipts…") { chooseReceipts() }
                     .buttonStyle(.bordered)
                 Button("Paste Photo") { pastePhoto() }
                     .buttonStyle(.bordered)
@@ -215,14 +215,14 @@ struct ContentView: View {
         sourcePDFURL = url
     }
 
-    private func choosePhotos() {
+    private func chooseReceipts() {
         let panel = NSOpenPanel()
-        panel.title = "Choose receipt photos"
-        panel.allowedContentTypes = [.jpeg, .heic, .heif, .png]
+        panel.title = "Choose receipt photos or PDFs"
+        panel.allowedContentTypes = [.jpeg, .heic, .heif, .png, .pdf]
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         if panel.runModal() == .OK {
-            addPhotos(panel.urls)
+            addReceipts(panel.urls)
         }
     }
 
@@ -243,26 +243,26 @@ struct ContentView: View {
             errorMessage = "Could not save the pasted image: \(error.localizedDescription)"
             return
         }
-        addPhotos([url])
+        addReceipts([url])
     }
 
-    private func addPhotos(_ urls: [URL]) {
-        let accepted = acceptedPhotoURLs(urls)
+    private func addReceipts(_ urls: [URL]) {
+        let accepted = acceptedReceiptURLs(urls)
         guard !accepted.isEmpty else { return }
-        for url in accepted where !photoURLs.contains(url) {
-            photoURLs.append(url)
+        for url in accepted where !receiptURLs.contains(url) {
+            receiptURLs.append(url)
         }
         clearResults()
     }
 
-    private func acceptedPhotoURLs(_ urls: [URL]) -> [URL] {
+    private func acceptedReceiptURLs(_ urls: [URL]) -> [URL] {
         urls.filter { url in
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
                   !isDirectory.boolValue else {
                 return false
             }
-            return photoExtensions.contains(url.pathExtension.lowercased())
+            return receiptExtensions.contains(url.pathExtension.lowercased())
         }
     }
 
@@ -273,10 +273,10 @@ struct ContentView: View {
     }
 
     private func generate() {
-        guard let source = sourcePDFURL, !photoURLs.isEmpty else { return }
+        guard let source = sourcePDFURL, !receiptURLs.isEmpty else { return }
         isGenerating = true
         clearResults()
-        let urls = photoURLs
+        let urls = receiptURLs
 
         Task.detached(priority: .userInitiated) {
             do {
@@ -332,7 +332,7 @@ struct DropZone: View {
     }
 }
 
-struct PhotoRow: View {
+struct ReceiptRow: View {
     let url: URL
     let remove: () -> Void
 
@@ -346,7 +346,7 @@ struct PhotoRow: View {
                     .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.secondary.opacity(0.3)))
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             } else {
-                Image(systemName: "photo")
+                Image(systemName: url.pathExtension.lowercased() == "pdf" ? "doc.richtext" : "photo")
                     .frame(width: 34, height: 34)
             }
             Text(url.lastPathComponent)
@@ -359,7 +359,7 @@ struct PhotoRow: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Remove this photo")
+            .help("Remove this receipt")
         }
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
@@ -368,6 +368,10 @@ struct PhotoRow: View {
 
 enum ThumbnailLoader {
     static func load(_ url: URL) -> NSImage? {
+        if url.pathExtension.lowercased() == "pdf" {
+            guard let page = PDFDocument(url: url)?.page(at: 0) else { return nil }
+            return page.thumbnail(of: NSSize(width: 96, height: 96), for: .mediaBox)
+        }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
